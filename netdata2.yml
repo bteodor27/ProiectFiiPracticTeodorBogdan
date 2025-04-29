@@ -1,0 +1,66 @@
+- name: install netdata
+  hosts: app
+  become: yes
+  vars:
+    netdata_domain: "netdata.fiipractic.lan"
+    auth_username: "admin"
+    auth_password: "securepassword"
+    nginx_config_path: "/etc/nginx/sites-available/netdata.conf"
+    nginx_enabled_path: "/etc/nginx/sites-enabled/netdata.conf"
+
+  tasks:
+
+    - name: install Netdata
+      ansible.builtin.shell: |
+        bash <(curl -Ss https://my-netdata.io/kickstart.sh) --non-interactive
+      args:
+        creates: /usr/sbin/netdata
+
+    - name: install Nginx
+      ansible.builtin.yum:
+        name: nginx
+        state: present
+        update_cache: yes
+
+    - name: create directory for htpasswd
+      ansible.builtin.file:
+        path: /etc/nginx/.htpasswd
+        state: touch
+        mode: '0640'
+        owner: root
+        group: root
+
+    - name: create htpasswd file using openssl
+      ansible.builtin.shell: |
+        printf "%s:%s\n" "{{ auth_username }}" "$(openssl passwd -apr1 {{ auth_password }})" > /etc/nginx/.htpasswd
+        chown www-data:www-data /etc/nginx/.htpasswd
+        chmod 640 /etc/nginx/.htpasswd
+      args:
+        creates: /etc/nginx/.htpasswd
+      when: ansible_facts.pkg_mgr == "apt"
+
+    - name: Create Nginx configuration
+      ansible.builtin.template:
+        src: nginx-netdata.conf.j2
+        dest: "{{ nginx_config_path }}"
+        mode: '0644'
+      notify: restart nginx
+
+    - name: enable Nginx config
+      ansible.builtin.file:
+        src: "{{ nginx_config_path }}"
+        dest: "{{ nginx_enabled_path }}"
+        state: link
+      notify: restart nginx
+
+    - name: disable default nginx site
+      ansible.builtin.file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: restart nginx
+
+  handlers:
+    - name: restart nginx
+      ansible.builtin.service:
+        name: nginx
+        state: restarted
